@@ -1,19 +1,16 @@
 import io
 import pdfplumber
 
-
-def pdf_to_text(uploaded_file) -> str:
+def pdf_to_text_from_bytes(pdf_bytes: bytes, max_pages: int | None = 45) -> str:
     """
-    Reads a Streamlit uploaded PDF directly from memory (no file path needed).
-    Returns extracted text as a single string.
+    Extract text from PDF bytes.
+    max_pages caps work for Streamlit Cloud stability.
     """
-    pdf_bytes = uploaded_file.read()
-
     text_parts = []
     with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
-        for page in pdf.pages:
-            text = page.extract_text() or ""
-            if text.strip():
-                text_parts.append(text)
-
+        pages = pdf.pages if max_pages is None else pdf.pages[:max_pages]
+        for page in pages:
+            t = page.extract_text() or ""
+            if t.strip():
+                text_parts.append(t)
     return "\n".join(text_parts)
