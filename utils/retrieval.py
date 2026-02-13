@@ -1,41 +1,52 @@
 import re
-from typing import List, Tuple
-
+from typing import Dict, List, Tuple, Set
 
 def chunk_text(text: str, chunk_size: int = 900, overlap: int = 150) -> List[str]:
-    """
-    Splits long text into overlapping chunks for simple retrieval.
-    """
     text = re.sub(r"\s+", " ", text).strip()
     chunks = []
     i = 0
     while i < len(text):
-        chunks.append(text[i : i + chunk_size])
+        chunks.append(text[i:i+chunk_size])
         i += (chunk_size - overlap)
     return chunks
 
+def _tokens(s: str) -> List[str]:
+    s = re.sub(r"[^a-z0-9 ]+", " ", s.lower())
+    return [t for t in s.split() if len(t) > 2]
 
-def _normalize(q: str) -> List[str]:
-    q = re.sub(r"[^a-z0-9 ]+", " ", q.lower())
-    tokens = [t for t in q.split() if len(t) > 2]
-    return tokens
-
-
-def _score(query: str, chunk: str) -> int:
-    tokens = _normalize(query)
-    c = chunk.lower()
-    return sum(1 for t in tokens if t in c)
-
-
-def top_k(query: str, chunks: List[str], k: int = 4) -> List[Tuple[int, str]]:
+def build_inverted_index(chunks: List[str], max_unique_tokens_per_chunk: int = 250) -> Dict[str, Set[int]]:
     """
-    Returns top-k chunks as (score, chunk_text).
+    token -> set(chunk_idx)
+    Caps tokens per chunk to control memory usage on Streamlit Cloud.
     """
+    index: Dict[str, Set[int]] = {}
+    for i, ch in enumerate(chunks):
+        toks = list(dict.fromkeys(_tokens(ch)))  # de-dupe, preserve order
+        toks = toks[:max_unique_tokens_per_chunk]
+        for tok in toks:
+            index.setdefault(tok, set()).add(i)
+    return index
+
+def top_k(query: str, chunks: List[str], index: Dict[str, Set[int]], k: int = 4) -> List[Tuple[int, str]]:
+    q_toks = _tokens(query)
+    if not q_toks:
+        return []
+
+    candidate_ids: Set[int] = set()
+    for t in q_toks:
+        ids = index.get(t)
+        if ids:
+            candidate_ids |= ids
+
+    if not candidate_ids:
+        return []
+
     scored = []
-    for ch in chunks:
-        s = _score(query, ch)
-        if s > 0:
-            scored.append((s, ch))
+    for i in candidate_ids:
+        ch_low = chunks[i].lower()
+        score = sum(1 for t in q_toks if t in ch_low)
+        if score > 0:
+            scored.append((score, chunks[i]))
 
     scored.sort(key=lambda x: x[0], reverse=True)
     return scored[:k]
