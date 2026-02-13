@@ -1,6 +1,5 @@
-streamlit
-pandas
-numpy
-pdfplumber
-python-docx
-openpyxl
+streamlit==1.36.0
+requests==2.32.3
+beautifulsoup4==4.12.3
+numpy==2.0.1
+pandas==2.2.2
