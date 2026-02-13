@@ -1,72 +1,71 @@
 from dataclasses import dataclass
-from typing import List
-
+from typing import List, Dict
 
 @dataclass
 class Advisory:
-    decision: str        # "SHIP" | "HOLD" | "DO_NOT_SHIP"
+    decision: str
     risk_score: int
     reasons: List[str]
+    components: Dict[str, int]
 
-
-def advisory_from_ear746(
-    destination: str,
-    product: str,
-    quantity: float,
-    unit_value: float,
-    ear746_text: str,
-) -> Advisory:
+def advisory_from_ear746(destination: str, product: str, quantity: float, unit_value: float, ear746_text: str) -> Advisory:
     """
     EAR Part 746-only demo advisory logic.
-
-    NOTE: This is intentionally simplified for demo:
-    - Comprehensive controls destinations => DO_NOT_SHIP
-    - Special controls destinations => HOLD
-    - Everything else => SHIP
-
-    You can later replace this with clause-aware rules + OFAC + SDN screening.
+    Returns a risk score + component breakdown for plotting.
     """
     dest = destination.strip().lower()
+    product_l = product.lower()
+    total_value = quantity * unit_value
 
-    # Baseline sets for a credible demo narrative (EAR 746 focus)
     comprehensive = {"cuba", "iran", "syria"}
     special = {"north korea", "russia", "belarus", "crimea", "donetsk", "luhansk"}
 
-    reasons = []
-    risk = 0
+    reasons: List[str] = []
+    components: Dict[str, int] = {"Destination": 0, "Product": 0, "Value": 0, "Base": 0}
 
-    total_value = quantity * unit_value
-
-    # Destination screening
+    # Destination scoring
     if dest in comprehensive:
-        risk += 85
-        reasons.append(f"Destination '{destination}' aligns with comprehensive controls referenced under EAR Part 746.")
-        reasons.append("Treat as embargo-style controls for demo: stop shipment and route to compliance for authorization.")
+        components["Destination"] = 85
+        reasons.append(f"Destination '{destination}' aligns with comprehensive controls referenced under EAR Part 746 (demo rule).")
+        reasons.append("Stop shipment and route to compliance for authorization.")
         if total_value >= 25000:
-            reasons.append(f"High declared value (${total_value:,.0f}) increases scrutiny and documentation requirements.")
-        return Advisory(decision="DO_NOT_SHIP", risk_score=risk, reasons=reasons)
+            components["Value"] = 10
+            reasons.append(f"High declared value (${total_value:,.0f}) increases scrutiny.")
+        risk = sum(components.values())
+        return Advisory("DO_NOT_SHIP", risk, reasons, components)
 
     if dest in special:
-        risk += 65
-        reasons.append(f"Destination '{destination}' is covered by special controls referenced in EAR Part 746 sections.")
-        reasons.append("Place shipment on hold pending compliance review and any required licensing determination.")
+        components["Destination"] = 65
+        reasons.append(f"Destination '{destination}' is covered by special controls referenced in EAR Part 746 (demo rule).")
+        reasons.append("Place shipment on hold pending compliance review.")
         if total_value >= 25000:
-            reasons.append(f"High declared value (${total_value:,.0f}) increases scrutiny and documentation requirements.")
-        return Advisory(decision="HOLD", risk_score=risk, reasons=reasons)
+            components["Value"] = 10
+            reasons.append(f"High declared value (${total_value:,.0f}) increases scrutiny.")
+        risk = sum(components.values())
+        return Advisory("HOLD", risk, reasons, components)
 
-    # Product heuristic (pure demo)
-    product_l = product.lower()
-    if any(k in product_l for k in ["drone", "uav", "flight controller", "encryption", "satellite"]):
-        risk += 20
-        reasons.append("Product appears potentially export-controlled (demo heuristic). Consider classification and end-use review.")
+    # Product heuristics (demo)
+    if any(k in product_l for k in ["drone", "uav", "flight controller", "satellite"]):
+        components["Product"] += 25
+        reasons.append("Product appears defense-adjacent/high-tech (demo heuristic). Classification/end-use review recommended.")
 
-    # Default
-    risk += 15
+    if any(k in product_l for k in ["encrypted", "encryption", "router", "wi-fi"]):
+        components["Product"] += 15
+        reasons.append("Product includes encryption/telecom (demo heuristic). Classification review recommended.")
+
+    if "lithium" in product_l:
+        components["Product"] += 10
+        reasons.append("Lithium batteries may have carrier/dangerous goods constraints (demo heuristic).")
+
+    # Base + Value
+    components["Base"] = 15
+
     if total_value >= 25000:
-        risk += 10
-        reasons.append(f"High declared value (${total_value:,.0f}) increases scrutiny and documentation requirements.")
+        components["Value"] = 10
+        reasons.append(f"High declared value (${total_value:,.0f}) increases scrutiny.")
 
     if not reasons:
-        reasons.append("No direct EAR Part 746 match found in this demo phase. Continue with standard screening.")
+        reasons.append("No direct EAR Part 746 match found in this demo phase. Continue standard screening.")
 
-    return Advisory(decision="SHIP", risk_score=risk, reasons=reasons)
+    risk = sum(components.values())
+    return Advisory("SHIP", risk, reasons, components)
