@@ -1,144 +1,121 @@
-import json
 import streamlit as st
-from bs4 import BeautifulSoup
 
-from utils.downloader import download_if_needed
-from utils.advisor import build_advisory
-from utils.retrieval import chunk_text, retrieve_top_snippets
+from utils.pdf_loader import pdf_to_text
+from utils.retrieval import chunk_text, top_k
+from utils.ear746_advisor import advisory_from_ear746
 
-# ---------------- Page config ----------------
-st.set_page_config(page_title="Regulated Shipping Advisor", layout="wide")
 
-st.markdown("""
-<style>
-.block-container { padding-top: 1rem; }
-.small { font-size: 0.9rem; opacity: 0.85; }
-</style>
-""", unsafe_allow_html=True)
+# ---------------- Page Config ----------------
+st.set_page_config(page_title="Regulated Shipping Advisor (EAR 746)", layout="wide")
+st.title("🧭 Regulated Shipping Advisor — EAR Part 746 (Demo)")
+st.caption("Upload EAR Part 746 (PDF) → get SHIP/HOLD/DO_NOT_SHIP advisory + evidence snippets + Q&A. Demo only (not legal advice).")
 
-st.markdown("<h1 style='text-align:center;'>🧭 Regulated Shipping Advisor (Demo)</h1>", unsafe_allow_html=True)
-st.markdown("<div class='small' style='text-align:center;'>Not legal advice. Demo for regulated-destination + commodity risk screening.</div>", unsafe_allow_html=True)
 
-# ---------------- Load demo data ----------------
-with open("data/sample_shipments.json", "r", encoding="utf-8") as f:
-    shipments = json.load(f)
+# ---------------- Upload Regulatory Base ----------------
+uploaded_pdf = st.file_uploader("📄 Upload EAR Part 746 Regulatory Document (PDF)", type=["pdf"])
 
-with open("data/policy_config.json", "r", encoding="utf-8") as f:
-    policy = json.load(f)
+if not uploaded_pdf:
+    st.info("Please upload the EAR Part 746 PDF to continue.")
+    st.stop()
 
-# ---------------- Download regulatory sources ----------------
-with st.spinner("Refreshing US regulatory sources (cached)…"):
-    reg_paths = download_if_needed(cache_dir="data/regdocs", max_age_hours=24)
 
-# Build retrieval corpus (HTML -> text -> chunks)
-def html_to_text(path: str) -> str:
-    with open(path, "r", encoding="utf-8") as f:
-        soup = BeautifulSoup(f.read(), "html.parser")
-    return soup.get_text(" ", strip=True)
+# ---------------- Parse PDF ----------------
+with st.spinner("Reading and parsing EAR Part 746 PDF..."):
+    ear_text = pdf_to_text(uploaded_pdf)
+    ear_chunks = chunk_text(ear_text)
 
-bis_text = html_to_text(reg_paths["bis_part_746_html"])
-ofac_text = html_to_text(reg_paths["ofac_country_info_html"])
 
-corpus_chunks = []
-for ch in chunk_text(bis_text):
-    corpus_chunks.append(("BIS eCFR 15 CFR Part 746", ch))
-for ch in chunk_text(ofac_text):
-    corpus_chunks.append(("OFAC Sanctions Programs & Country Info", ch))
-
-# ---------------- UI layout ----------------
+# ---------------- UI Layout ----------------
 left, right = st.columns([1, 1])
 
-# ===== LEFT: Shipment selection form =====
+
+# ===== LEFT: Shipment Inputs =====
 with left:
-    st.subheader("📦 Shipment Setup")
-
-    ship_ids = [s["shipment_id"] for s in shipments]
-    ship_id = st.selectbox("1) Choose a shipment", ship_ids)
-
-    shipment = next(s for s in shipments if s["shipment_id"] == ship_id)
-
-    st.write("**Item:**", shipment["item_name"])
-    st.write("**HS Code:**", shipment["hs_code"])
-    st.write("**Category:**", shipment["category"])
-    st.write("**Description:**", shipment["description"])
+    st.subheader("📦 Shipment Details (Demo Inputs)")
 
     destination = st.selectbox(
-        "2) Destination country",
-        ["United Arab Emirates", "Singapore", "Germany", "India", "Cuba", "Iran", "North Korea", "Syria", "Russia"]
+        "Destination Country",
+        [
+            "United Arab Emirates",
+            "India",
+            "Germany",
+            "Singapore",
+            "Cuba",
+            "Iran",
+            "Syria",
+            "Russia",
+            "Belarus",
+            "North Korea",
+            "Crimea",
+            "Donetsk",
+            "Luhansk",
+        ],
     )
 
-    qty = st.number_input(f"3) Quantity ({shipment['unit']})", min_value=0.0, value=float(shipment["default_qty"]), step=1.0)
-    unit_value = st.number_input("4) Unit value (USD)", min_value=0.0, value=float(shipment["unit_value_usd"]), step=5.0)
+    product = st.text_input("Product / Item", "Lithium-ion Batteries")
+    quantity = st.number_input("Quantity", min_value=0.0, value=10.0, step=1.0)
+    unit_value = st.number_input("Unit value (USD)", min_value=0.0, value=35.0, step=5.0)
 
     run = st.button("🔎 Generate Advisory", type="primary")
 
-# ===== RIGHT: Advisory + Q&A =====
+
+# ===== RIGHT: Advisory Output =====
 with right:
-    st.subheader("🧾 Advisory Output")
+    st.subheader("🧾 Compliance Advisory (EAR 746-only)")
 
-    container = st.container(height=420)
+    if run:
+        advisory = advisory_from_ear746(
+            destination=destination,
+            product=product,
+            quantity=quantity,
+            unit_value=unit_value,
+            ear746_text=ear_text,
+        )
 
-    with container:
-        if run:
-            result = build_advisory(
-                shipment=shipment,
-                destination=destination,
-                qty=qty,
-                unit_value=unit_value,
-                policy=policy
-            )
-
-            if result.decision == "SHIP":
-                st.success(f"Decision: {result.decision} ✅")
-            elif result.decision == "HOLD":
-                st.warning(f"Decision: {result.decision} ⏸️")
-            else:
-                st.error(f"Decision: {result.decision} ⛔")
-
-            st.metric("Risk score", result.risk_score)
-
-            st.markdown("**Why this was flagged**")
-            for r in result.reasons:
-                st.write("•", r)
-
-            st.markdown("**Recommended next steps**")
-            for n in result.next_steps:
-                st.write("•", n)
-
-            st.divider()
-            st.caption("Regulatory sources cached from BIS eCFR Part 746 and OFAC program list (refreshed every 24h).")
-
+        # Decision banner
+        if advisory.decision == "SHIP":
+            st.success(f"Decision: {advisory.decision} ✅")
+        elif advisory.decision == "HOLD":
+            st.warning(f"Decision: {advisory.decision} ⏸️")
         else:
-            st.info("Select shipment + destination, then click **Generate Advisory**.")
+            st.error(f"Decision: {advisory.decision} ⛔")
 
-    st.subheader("💬 Ask the Advisor (retrieval-based)")
+        st.metric("Risk Score", advisory.risk_score)
 
-    if "chat" not in st.session_state:
-        st.session_state.chat = []
+        # Reasons
+        st.markdown("### Reasons")
+        for r in advisory.reasons:
+            st.write("•", r)
 
-    for role, msg in st.session_state.chat:
-        with st.chat_message(role):
-            st.write(msg)
-
-    q = st.chat_input("Ask: 'Is Cuba restricted?'  'What does Part 746 cover?'  'OFAC country list?'")
-    if q:
-        st.session_state.chat.append(("user", q))
-        with st.chat_message("user"):
-            st.write(q)
-
-        hits = retrieve_top_snippets(q, corpus_chunks, k=4)
-
-        answer_lines = []
-        if not hits:
-            answer_lines.append("I couldn’t find a strong match in the cached regulatory text. Try using different keywords (e.g., 'Cuba', 'Iran', 'Part 746', 'license').")
+        # Evidence snippets (keyword retrieval)
+        st.markdown("### Supporting regulation snippets (from uploaded PDF)")
+        query = f"{destination} {product} Part 746 license"
+        hits = top_k(query, ear_chunks, k=3)
+        if hits:
+            for score, snippet in hits:
+                st.write(f"**Match score:** {score}")
+                st.write(snippet[:550] + "…")
+                st.write("---")
         else:
-            answer_lines.append("Top relevant regulatory snippets (for demo):\n")
-            for src, snippet, score in hits:
-                answer_lines.append(f"**Source:** {src}  (match score: {score})")
-                answer_lines.append(f"— {snippet[:420]}…\n")
+            st.info("No strong snippet match found for this query. Try different keywords.")
+    else:
+        st.info("Fill shipment details and click **Generate Advisory**.")
 
-        final = "\n".join(answer_lines)
 
-        st.session_state.chat.append(("assistant", final))
-        with st.chat_message("assistant"):
-            st.write(final)
+# ---------------- Q&A (Retrieval) ----------------
+st.divider()
+st.subheader("💬 Ask Questions (EAR 746 only)")
+
+question = st.text_input("Ask a question about Part 746", "What does Part 746 say about Cuba?")
+
+ask = st.button("Search Regulation Text")
+
+if ask:
+    hits = top_k(question, ear_chunks, k=4)
+    if not hits:
+        st.warning("No strong match found. Try terms like '746.1', 'embargo', 'Cuba', 'Iran', 'Syria', 'Russia', 'Belarus'.")
+    else:
+        for score, snippet in hits:
+            st.write(f"**Match score:** {score}")
+            st.write(snippet[:800] + "…")
+            st.write("---")
